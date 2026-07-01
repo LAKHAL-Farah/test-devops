@@ -1,2 +1,2 @@
 .env
-odoo.conf
+apps/odoo.conf
