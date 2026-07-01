@@ -13,13 +13,30 @@ services:
       - postgres-data:/var/lib/postgresql/data
     networks:
       - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add: 
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
 
   odoo:
     image: odoo:17
     container_name: rif_odoo
     restart: unless-stopped
     depends_on:
-      - db
+      db:
+        condition: service_healthy
     env_file:
       - .env
     environment:
@@ -33,19 +50,52 @@ services:
       - ./odoo.conf:/etc/odoo/odoo.conf
     networks:
       - backend
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8069/web/login', timeout=5).getcode()==200 else 1)"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+
+      - /tmp
+    cap_drop:
+      - ALL
   nginx:
     image: nginx:stable-alpine
     container_name: rif_nginx
     restart: unless-stopped
     depends_on:
-      - odoo
+      odoo:
+        condition: service_healthy
     ports:
       - "80:80"
     volumes:
       - ./nginx/odoo.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - backend
-
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:80"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - NET_BIND_SERVICE
+      - SETUID
+      - SETGID
 networks:
   backend:
     driver: bridge
