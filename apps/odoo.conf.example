@@ -1,0 +1,6 @@
+[options]
+admin_passwd = CHANGE_ME
+db_host = db
+db_port = 5432
+db_user = pg
+db_password = CHANGE_ME

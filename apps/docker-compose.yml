@@ -30,8 +30,10 @@ services:
       - "8069:8069"
     volumes:
       - odoo-filestore:/var/lib/odoo
+      - ./odoo.conf:/etc/odoo/odoo.conf
     networks:
       - backend
+    
 
 networks:
   backend:
