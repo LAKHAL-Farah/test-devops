@@ -1,97 +1,96 @@
-# Runbook de restauration — ERP Odoo
+# Restore Runbook — Odoo ERP
 
-## Prérequis
-- Docker et Docker Compose installés
-- Une archive de backup dans `/backup/backup_YYYYMMDD_HHMMSS.tar.gz`
-- Fichier `.env` présent dans `apps/`, avec `ODOO_DB_NAME` défini
-- **Exécuter ces commandes depuis un shell Linux natif (WSL, ou Linux/macOS directement).**
-  Sous Windows, Git Bash (MINGW64) réécrit automatiquement les chemins absolus
-  (`/var/lib/odoo` devient `C:/Program Files/Git/var/lib/odoo`), ce qui casse
-  silencieusement `docker exec` et `docker cp`. Utiliser WSL évite ce problème.
+## Prerequisites
+- Docker and Docker Compose installed
+- A backup archive at `/backup/backup_YYYYMMDD_HHMMSS.tar.gz`
+- `.env` file present in `apps/`, with `ODOO_DB_NAME` set
+- **Run these commands from a native Linux shell (WSL, or Linux/macOS directly).**
+  On Windows, Git Bash (MINGW64) automatically rewrites absolute paths
+  (`/var/lib/odoo` becomes `C:/Program Files/Git/var/lib/odoo`), which silently
+  breaks `docker exec` and `docker cp`. Using WSL avoids this issue.
 
-## Procédure
+## Procedure
 
-1. **Arrêter et supprimer la stack existante (si applicable)**
+1. **Stop and remove the existing stack (if applicable)**
 ```bash
    cd apps
    docker compose down -v
 ```
 
-2. **Redémarrer uniquement la base de données**
+2. **Restart only the database**
 ```bash
    docker compose up -d db
-   docker compose ps   # attendre que db soit "healthy"
+   docker compose ps   # wait until db is "healthy"
 ```
 
-3. **Extraire l'archive de backup**
+3. **Extract the backup archive**
 ```bash
    LATEST=$(ls -t /backup/backup_*.tar.gz | head -1)
    mkdir -p /tmp/restore
    tar -xzf "$LATEST" -C /tmp/restore
 ```
 
-4. **Recréer la base de données vide, puis restaurer le dump**
+4. **Recreate the empty database, then restore the dump**
 
-   Sur un volume neuf, la base Odoo n'existe pas encore — `pg_dump` (sans `-C`)
-   ne restaure que le contenu, pas la base elle-même. Il faut donc la créer
-   explicitement avant de restaurer :
+   On a fresh volume, the Odoo database doesn't exist yet — `pg_dump`
+   (without `-C`) only restores the content, not the database itself. It
+   must therefore be created explicitly before restoring:
 ```bash
    docker exec -i rif_db createdb -U "$POSTGRES_USER" "$ODOO_DB_NAME"
    docker exec -i rif_db psql -U "$POSTGRES_USER" -d "$ODOO_DB_NAME" \
      < /tmp/restore/db.sql
 ```
 
-   **Vérifier avant de continuer :**
+   **Verify before continuing:**
 ```bash
    docker exec -i rif_db psql -U "$POSTGRES_USER" -d "$ODOO_DB_NAME" \
      -c "SELECT name, state FROM ir_module_module WHERE name='sale';"
 ```
-   Doit retourner `state = installed`. Si ce n'est pas le cas, ne pas
-   continuer — le problème est dans le dump, pas dans la suite de la procédure.
+   Must return `state = installed`. If not, do not continue — the problem
+   is in the dump, not in the rest of the procedure.
 
-5. **Restaurer le filestore Odoo**
+5. **Restore the Odoo filestore**
 
-   Méthode recommandée — monter le volume directement via un conteneur
-   jetable, ce qui évite les problèmes de permissions rencontrés avec
-   `docker cp` sur un conteneur odoo durci (`cap_drop: ALL`) :
+   Recommended method — mount the volume directly via a disposable
+   container, which avoids the permission issues encountered with
+   `docker cp` on a hardened odoo container (`cap_drop: ALL`):
 ```bash
    docker run --rm \
      -v apps_odoo-filestore:/data \
      -v /tmp/restore/odoo-filestore:/src:ro \
      alpine sh -c "cp -a /src/. /data/ && chown -R 101:101 /data"
 ```
-   (`101:101` correspond à l'UID/GID de l'utilisateur `odoo` dans l'image
-   officielle — à vérifier avec `docker exec -u root rif_odoo id odoo`
-   si l'image change.)
+   (`101:101` corresponds to the UID/GID of the `odoo` user in the
+   official image — verify with `docker exec -u root rif_odoo id odoo`
+   if the image changes.)
 
-   **Méthode alternative** (si le service odoo tourne déjà et qu'on préfère
-   `docker cp`) : le conteneur odoo n'a aucune capability (`cap_drop: ALL`,
-   pas de `cap_add`), donc même en tant que root dans le conteneur, `chown`
-   échouera avec "Permission denied". Il faut temporairement ajouter
-   `CHOWN`, `DAC_OVERRIDE`, `FOWNER` dans `cap_add` du service odoo,
-   relancer `docker compose up -d odoo`, faire le chown, puis retirer
-   ces capabilities et relancer à nouveau. À éviter si possible — la
-   méthode par volume ci-dessus est plus propre.
+   **Alternative method** (if the odoo service is already running and
+   `docker cp` is preferred): the odoo container has no capabilities
+   (`cap_drop: ALL`, no `cap_add`), so even as root inside the container,
+   `chown` will fail with "Permission denied". You must temporarily add
+   `CHOWN`, `DAC_OVERRIDE`, `FOWNER` to the odoo service's `cap_add`,
+   restart with `docker compose up -d odoo`, perform the chown, then
+   remove these capabilities and restart again. Avoid this if possible —
+   the volume-based method above is cleaner.
 
-6. **Redémarrer la stack complète**
+6. **Restart the full stack**
 ```bash
    docker compose up -d
-   docker compose ps   # tous les services doivent être "healthy"
+   docker compose ps   # all services must be "healthy"
 ```
-   Odoo peut rester en `health: starting` jusqu'à 60s après le démarrage
-   (`start_period` du healthcheck) — c'est normal, attendre avant de
-   s'inquiéter.
+   Odoo may stay in `health: starting` for up to 60s after startup
+   (healthcheck `start_period`) — this is normal, wait before worrying.
 
-7. **Vérification finale**
-   - Accéder à `http://erp.local`
-   - Se connecter à la base restaurée (nom = `$ODOO_DB_NAME`)
-   - Confirmer que le module Ventes est toujours installé
+7. **Final verification**
+   - Access `http://erp.local`
+   - Log in to the restored database (name = `$ODOO_DB_NAME`)
+   - Confirm that the Sales module is still installed
 
 ## Notes
-- `docker compose down -v` supprime les volumes — à utiliser uniquement en
-  cas de sinistre réel ou de test contrôlé.
-- Le script `apps/backup.sh` doit être exécuté avant toute opération
-  destructive pour garantir une archive récente.
-- `ODOO_DB_NAME` (le nom de la base créée via l'interface Odoo) est
-  distinct de `POSTGRES_DB` (base de maintenance par défaut de
-  PostgreSQL) — ne pas confondre les deux lors de la restauration.
+- `docker compose down -v` removes volumes — use only in the case of an
+  actual disaster or a controlled test.
+- The `apps/backup.sh` script must be run before any destructive
+  operation to guarantee a recent archive.
+- `ODOO_DB_NAME` (the name of the database created via the Odoo UI) is
+  distinct from `POSTGRES_DB` (PostgreSQL's default maintenance
+  database) — do not confuse the two during restoration.
