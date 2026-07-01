@@ -64,6 +64,10 @@ services:
       - /tmp
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
   nginx:
     image: nginx:stable-alpine
     container_name: rif_nginx

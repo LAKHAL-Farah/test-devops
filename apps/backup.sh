@@ -14,7 +14,8 @@ ARCHIVE_NAME="backup_${TIMESTAMP}.tar.gz"
 
 DB_CONTAINER="rif_db"
 ODOO_CONTAINER="rif_odoo"
-DB_NAME="${POSTGRES_DB}"
+: "${ODOO_DB_NAME:?ODOO_DB_NAME not set in .env}"
+DB_NAME="${ODOO_DB_NAME}"
 DB_USER="${POSTGRES_USER}"
 ODOO_FILESTORE_PATH="/var/lib/odoo"  
 
